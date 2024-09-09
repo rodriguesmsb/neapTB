@@ -1,0 +1,588 @@
+---
+title: "Main analysis"
+output: html_document
+date: '2022-10-05'
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r}
+rm(list=ls())
+source("Auxiliary_functions.R")
+libraries <-  c("tidyverse",  "scales", "survival", "car",
+                "compareGroups", "sjPlot", "easystats", "brms", "cmdstanr",
+                "bayesplot", "parameters","fmsb")
+lapply(libraries, require, character.only = TRUE)
+```
+
+
+```{r}
+data <-  read_csv("../data/INLA_data.csv")
+```
+
+
+```{r}
+data <- data %>% 
+  mutate(state_id = as.factor(sg_uf_not),
+         year = as.numeric(format(as.Date(dt_notific), "%Y")),
+         cases = 1)
+
+data %>%
+  group_by(tratsup_at,tratamento,year) %>%
+  summarise(n = n()) %>%
+  spread(key =tratsup_at, value = n)
+```
+
+
+```{r}
+compare_groups_data <- data %>%
+  filter(situa_ence %in% c('Cure', 'Death', 'Treatment incomplete', 'Failure')) %>%
+  mutate(ouctome = ifelse(situa_ence == "Cure", "Favorable", "Unfavorable"),
+         vul_pop = ifelse(pop_vul == "Non vul pop", "Non vul pop", "Vul pop"))
+
+results <- compareGroups(ouctome ~ forma + agravaids +  agravalcoo + agravdiabe +
+                           agravdoenc + agravtabac + bacilosc_e + raiox_tora + histopatol +
+                           cultura_es + test_sensi + tratsup_at + test_molec +
+                           idade + cs_raca + cs_sexo + cs_escol_n,
+                           include.miss = TRUE,
+                           data = compare_groups_data)
+export2word(createTable(results, show.all = TRUE, digits.p = 4),
+            file = "../results/Table_CG_geral.docx")
+
+results <- compareGroups(tratamento ~ forma + agravaids +  agravalcoo + agravdiabe +
+                           agravdoenc + agravtabac + bacilosc_e + raiox_tora + histopatol +
+                           cultura_es + test_sensi + tratsup_at + situa_ence + test_molec +
+                           idade + cs_raca + cs_sexo + cs_escol_n,
+                           include.miss = TRUE,
+                           data = compare_groups_data)
+export2word(createTable(results, show.all = TRUE, digits.p = 4),
+            file = "../results/Table_CG_reentrada.docx")
+
+results <- compareGroups(vul_pop ~ forma + agravaids +  agravalcoo + agravdiabe +
+                           agravdoenc + agravtabac + bacilosc_e + raiox_tora + histopatol +
+                           cultura_es + test_sensi + tratsup_at + situa_ence + test_molec +
+                           idade + cs_raca + cs_sexo + cs_escol_n,
+                           include.miss = TRUE,
+                           data = compare_groups_data)
+export2word(createTable(results, show.all = TRUE,digits.p = 4),
+            file = "../results/Table_CG_pop_vul.docx")
+```
+
+
+
+
+```{r}
+#figure cases 
+yearly_cases <- data %>% 
+  group_by(year,tratsup_at) %>% 
+  summarise(cases = n()) %>% 
+  na.omit() %>% 
+  mutate(tratsup_at = ifelse(tratsup_at == 1,"Yes", "No")) %>% 
+  pivot_wider(names_from = tratsup_at, values_from = cases)
+
+
+ggplot(yearly_cases, aes(x = year)) + 
+  geom_bar(aes(y =  (Yes + No)), fill = "blue", stat = "identity") +
+  geom_bar(aes(y =  (Yes)), fill = "red", stat = "identity") +
+  theme_bw(base_size = 28) +
+  labs(y = "Number of Tuberculosis cases \n reported on SINAN")
+ggsave("../results/Fig_1_yearly_cases.pdf", device = "pdf", width = 25, height = 20)
+
+
+data %>% 
+    group_by(year) %>% 
+    summarise(cost = round(sum(ind_cost, na.rm = TRUE),2),
+             cases = n()) %>% 
+  ggplot(aes(x = year, y = cost)) +
+  geom_line(lty = 2, lwd = 2) +
+  labs(y = "General cost of tuberculosis \n patients") +
+  theme_bw(base_size = 28) +
+  ylim(c(0,25000000))
+ggsave("../results/Fig_A_yearly_cost.pdf", device = "pdf", width = 25, height = 20)
+
+
+data %>% 
+  filter(pop_vul == "Non vul pop") %>% 
+  group_by(year) %>% 
+  summarise(cost = round(sum(ind_cost, na.rm = TRUE),2),
+             cases = n()) %>% 
+  ggplot(aes(x = year, y = cost)) +
+  geom_line(lty = 2, lwd = 2) +
+  labs(y = "Cost of tuberculosis in  \n non vulnerable patients") +
+  theme_bw(base_size = 28) +
+  ylim(c(0,25000000))
+ggsave("../results/Fig_B_yearly_cost_non_vul_pop.pdf", 
+       device = "pdf", width = 25, height = 20)
+
+
+data %>% 
+  filter(pop_vul != "Non vul pop") %>% 
+  group_by(year,pop_vul) %>% 
+  summarise(cost = round(sum(ind_cost, na.rm = TRUE),2),
+             cases = n()) %>% 
+  ggplot(aes(x = year, y = cost, colour = pop_vul)) +
+  geom_line(lty = 2, lwd = 2) +
+  labs(y = "Cost of tuberculosis in \n vulnerable patients", colour = "Population") +
+  theme_bw(base_size = 28) +
+   ylim(c(0,2500000))
+ggsave("../results/Fig_C_yearly_cost_vul_pop.pdf", 
+       device = "pdf", width = 25, height = 20)
+
+
+data %>% 
+  mutate(tratamento = ifelse(tratamento == 1, "Re enter", "New Case")) %>% 
+    group_by(year,tratamento) %>% 
+    summarise(cost = round(sum(ind_cost, na.rm = TRUE),2),
+             cases = n()) %>% 
+  ggplot(aes(x = year, y = cost, colour = tratamento)) +
+  geom_line(lty = 2, lwd = 2) +
+  labs(y = "Cost of tuberculosis in \n different patients", colour = "Diagnostic") +
+  theme_bw(base_size = 28) +
+  ylim(c(0,25000000))
+ggsave("../results/Fig_D_yearly_cost_enter_type.pdf", 
+       device = "pdf", width = 25, height = 20)
+
+
+data %>% 
+  mutate(tratamento = ifelse(tratamento == 1, "Re enter", "New Case")) %>% 
+  group_by(year,pop_vul, tratamento) %>% 
+  summarise(cost = round(sum(ind_cost, na.rm = TRUE),2),
+             cases = n()) %>% 
+  ggplot(aes(x = year, y = cases, fill = tratamento)) +
+  geom_bar(stat = "identity") +
+  labs(y = "Cost of tuberculosis in \n different patients", fill = "Treatment") +
+  theme_bw(base_size = 28) +
+  facet_wrap(~pop_vul, scales = "free")
+ggsave("../results/Fig_E_cases_pop.pdf", 
+       device = "pdf", width = 25, height = 20)
+
+
+data %>% 
+  filter(!is.na(tratsup_at)) %>% 
+  filter(!is.na(pop_vul)) %>% 
+    mutate(tratsup_at = ifelse(tratsup_at == 1, "Yes", "No")) %>% 
+    group_by(year,pop_vul, tratsup_at) %>% 
+    summarise(cost = round(sum(ind_cost, na.rm = TRUE),2),
+             cases = n()) %>% 
+  ggplot(aes(x = year, y = cases, fill = tratsup_at)) +
+  geom_bar(stat = "identity") +
+  labs(y = "Cost of tuberculosis in \n different patients", fill = "DOT") +
+  theme_bw(base_size = 28) +
+  facet_wrap(~pop_vul, scales = "free")
+ggsave("../results/Fig_F_dot_pop.pdf", 
+       device = "pdf", width = 25, height = 20)
+```
+
+
+```{r}
+#creagte suplementary table for cost
+create_aux_table <- function(data, name){
+  table <- data %>% 
+    group_by(year) %>% 
+    summarise(cost = round(sum(ind_cost, na.rm = TRUE),2),
+             cases = n())
+    write_csv(table,paste0("../results/",name,".csv"))
+}
+
+
+create_aux_table(data %>% filter(tratamento == 0), name = "SA_new_cases")
+create_aux_table(data %>% filter(tratamento == 1), name = "SB_re_entrada")
+create_aux_table(data %>% filter(pop_vul == "Non vul pop"), name = "SC_non_vul")
+create_aux_table(data %>% filter(pop_vul == "HIV"), name = "SD_HIV")
+create_aux_table(data %>% filter(pop_vul == "Liberty deprivation"), name = "SE_LD")
+create_aux_table(data %>% filter(pop_vul == "Drug use"), name = "SF_DU")
+create_aux_table(data %>% filter(pop_vul == "Imigrants"), name = "SG_Imigrants")
+create_aux_table(data %>% filter(pop_vul == "Health Workers"), name = "SH_HW")
+create_aux_table(data %>% filter(pop_vul == "Homelessness"), name = "SI_Hom")
+create_aux_table(data, name = "SJ_Total_geral")
+create_aux_table(data %>% filter(pop_vul != "Non vul pop"), name = "SK_vul")
+```
+
+
+```{r}
+data %>% 
+  group_by(situa_ence) %>% 
+  summarise(count = n())
+```
+
+
+```{r}
+#outcome by year
+outcome_yearly <- data %>% 
+  filter(situa_ence %in% c('Cure', 'Death', 'Treatment incomplete', 'Failure')) %>%
+  group_by(situa_ence, year, tratsup_at) %>% 
+  summarise(outcome = n()) %>% 
+  mutate(tratsup_at = ifelse(tratsup_at == 1, "Yes", "No")) %>% 
+  na.omit()
+  
+
+ggplot(outcome_yearly, aes(x = year, y = outcome, fill = situa_ence)) + 
+  geom_bar(stat = "identity", position = "fill") +
+  theme_bw(base_size = 28) +
+  facet_wrap(~tratsup_at)
+ggsave("../results/Fig_2A_outcome_by_year.pdf", device = "pdf", width = 25, height = 20)
+write_csv(outcome_yearly, "../results/Outcome_yearly_data.csv")
+
+#2bnon vul
+outcome_yearly_non_vul <- data %>% 
+  filter(situa_ence %in% c('Cure', 'Death', 'Treatment incomplete', 'Failure')) %>%
+  filter(pop_vul == "Non vul pop") %>% 
+  group_by(situa_ence, year, tratsup_at) %>% 
+  summarise(outcome = n()) %>% 
+  mutate(tratsup_at = ifelse(tratsup_at == 1, "Yes", "No")) %>% 
+  na.omit()
+write_csv(outcome_yearly_non_vul, "../results/Outcome_yearly_non_vul_data.csv")
+
+ggplot(outcome_yearly, aes(x = year, y = outcome, fill = situa_ence)) + 
+  geom_bar(stat = "identity", position = "fill") +
+  theme_bw(base_size = 28) +
+  facet_wrap(~tratsup_at)
+ggsave("../results/Fig_2B_outcome_by_year_non_vul.pdf", device = "pdf", width = 25, height = 20)
+
+#2c vul
+outcome_yearly_vul <- data %>% 
+  filter(situa_ence %in% c('Cure', 'Death', 'Treatment incomplete', 'Failure')) %>%
+  filter(pop_vul != "Non vul pop") %>% 
+  group_by(situa_ence, year, tratsup_at) %>% 
+  summarise(outcome = n()) %>% 
+  mutate(tratsup_at = ifelse(tratsup_at == 1, "Yes", "No")) %>% 
+  na.omit()
+write_csv(outcome_yearly_vul, "../results/Outcome_yearly_vul_data.csv")
+
+ggplot(outcome_yearly, aes(x = year, y = outcome, fill = situa_ence)) + 
+  geom_bar(stat = "identity", position = "fill") +
+  theme_bw(base_size = 28) +
+  facet_wrap(~tratsup_at)
+ggsave("../results/Fig_2C_outcome_by_year_vul.pdf", device = "pdf", width = 25, height = 20)
+```
+
+
+```{r}
+pop_outcome_yearly <- data %>% 
+  filter(situa_ence %in% c('Cure', 'Death', 'Treatment incomplete', 'Failure')) %>%
+  filter(pop_vul != "Non vul pop") %>% 
+  group_by(situa_ence, year, tratsup_at, pop_vul) %>% 
+  summarise(outcome = n()) %>% 
+  mutate(tratsup_at = ifelse(tratsup_at == 1, "Yes", "No")) %>% 
+  na.omit()
+
+pop_outcome_yearly_dot <-  pop_outcome_yearly %>% 
+  filter(tratsup_at == "Yes")
+
+ggplot(pop_outcome_yearly_dot, aes(x = year, y = outcome, fill = situa_ence)) + 
+  geom_bar(stat = "identity", position = "fill") +
+  theme_bw(base_size = 28) +
+  facet_wrap(~pop_vul, ncol = 2, nrow = 4, scales = "free")
+ggsave("../results/Fig_3_outcome_by_year_pop_dot.pdf", device = "pdf", width = 25, height = 20)
+
+pop_outcome_yearly_non_dot <-  pop_outcome_yearly %>% 
+  filter(tratsup_at == "No")
+
+ggplot(pop_outcome_yearly_non_dot, aes(x = year, y = outcome, fill = situa_ence)) + 
+  geom_bar(stat = "identity", position = "fill") +
+  theme_bw(base_size = 28) +
+  facet_wrap(~pop_vul, ncol = 2, nrow = 4, scales = "free")
+ggsave("../results/Fig_3_outcome_by_year_pop_no_dot.pdf", device = "pdf", width = 25, height = 20)
+write_csv(pop_outcome_yearly, "../results/Pop_outcome_yearly_data.csv")
+
+
+new_case_outcome_yearly <- data %>% 
+  filter(situa_ence %in% c('Cure', 'Death', 'Treatment incomplete', 'Failure')) %>%
+  filter(tratamento == "0") %>% 
+  group_by(situa_ence, year, tratsup_at) %>% 
+  summarise(outcome = n()) %>% 
+  mutate(tratsup_at = ifelse(tratsup_at == 1, "Yes", "No")) %>% 
+  na.omit()
+
+ggplot(new_case_outcome_yearly, aes(x = year, y = outcome, fill = situa_ence)) + 
+  geom_bar(stat = "identity", position = "fill") +
+  theme_bw(base_size = 28) +
+  facet_wrap(~tratsup_at, ncol = 2, nrow = 4, scales = "free")
+ggsave("../results/Fig_3_outcome_by_year_new_case.pdf", 
+       device = "pdf", width = 25, height = 20)
+write_csv(new_case_outcome_yearly, "../results/New_cases_outcome_yearly_data.csv")
+
+retrat_outcome_yearly <- data %>% 
+  filter(situa_ence %in% c('Cure', 'Death', 'Treatment incomplete', 'Failure')) %>%
+  filter(tratamento == "1") %>% 
+  group_by(situa_ence, year, tratsup_at) %>% 
+  summarise(outcome = n()) %>% 
+  mutate(tratsup_at = ifelse(tratsup_at == 1, "Yes", "No")) %>% 
+  na.omit()
+write_csv(retrat_outcome_yearly, "../results/Retrat_cases_outcome_yearly_data.csv")
+
+
+ggplot(retrat_outcome_yearly, aes(x = year, y = outcome, fill = situa_ence)) + 
+  geom_bar(stat = "identity", position = "fill") +
+  theme_bw(base_size = 28) +
+  facet_wrap(~tratsup_at, ncol = 2, nrow = 4, scales = "free")
+ggsave("../results/Fig_3_outcome_by_year_retratamento.pdf", device = "pdf", width = 25, height = 20)
+```
+
+
+```{r}
+yearly_re_enter <- data %>% 
+  filter(tratamento == 1) %>% 
+  group_by(year) %>% 
+  summarise(cases = sum(cases))
+
+
+ltfu_year <- data %>% 
+  filter(situa_ence == "Treatment incomplete") %>% 
+  group_by(year) %>% 
+  summarise(ltfu = n())
+
+yearly_re_enter <- yearly_re_enter %>% 
+  left_join(ltfu_year)
+
+
+ggplot() +
+  geom_line(yearly_re_enter, mapping = aes(x = year, y = cases)) +
+  geom_col(subset(yearly_re_enter, year >= 2016), mapping = aes(x = year, y = ltfu)) +
+  geom_text(subset(yearly_re_enter, year >= 2016), mapping = aes(x = year, y = ltfu + 100, label = cases)) +
+  theme_bw(base_size = 28)
+ggsave("../results/Fig_4_re_enter_year.pdf", device = "pdf", width = 25, height = 20)
+```
+
+
+```{r}
+#logistic regression
+data %>% 
+  group_by(situa_ence) %>% 
+  summarise(n = n())
+
+
+logistic_data <- data %>% 
+  filter(situa_ence %in% c("Cure", "Treatment incomplete")) %>% 
+  mutate(situa_ence = ifelse(situa_ence == "Cure",1,0),
+         tratamento = ifelse(tratamento == 0, "New case", "Re enter"),
+         tratsup_at = factor(tratsup_at, levels = c(0,1), labels =c("No", "Yes")),
+         pop_vul = factor(pop_vul, levels = c("Non vul pop", "Drug use", "HIV",
+                                              "Homelessness", "Imigrants", 
+                                              "Liberty deprivation", "Pregnant",
+                                              "Health Workers"))) %>% 
+  rename(sex = cs_sexo, race = cs_raca)
+
+#Fazer uma tabela com tempo medio de permanência dos indivíduos por ano, dividindo em caso novo e #retratamento
+
+brm_logistic_model <- brm(
+  data = logistic_data,
+  family = bernoulli(),
+  formula = situa_ence ~ ind_cost + sex + tratamento + pop_vul + nu_ano,
+  seed = 14,
+  chains = 4, 
+  cores = 4, 
+  backend = "cmdstanr",
+  iter = 2000,
+)
+
+
+#check summary
+summary(brm_logistic_model)
+
+
+#check chain convergence
+pdf("../results/Chain_convergence.pdf", width = 30, height = 30)
+mcmc_trace(brm_logistic_model)
+dev.off()
+
+#plot posteriror predictive check
+pdf("../results/Predictive_posterior_check.pdf", width = 20, height = 15)
+pp_check(brm_logistic_model, type = "stat", ndraws = 100)
+dev.off()
+
+
+
+#problem \drug use was used as reference population
+my_function <-  function(x){
+  return(1/(1 + exp(-x)))
+}
+
+tab_model(brm_logistic_model, transform = "plogis")
+
+plot_model(brm_logistic_model, type = "pred", terms = c("ind_cost [all]", "pop_vul")) +
+  theme_bw(base_size = 58) +
+  labs(x = "Cost in dollars", y = "Probability of Cure", title = NULL, colour = "Type")
+ggsave("../results/Fig_6A_Probability_cure_geral.pdf",
+       device = "pdf", width = 35, height = 20)
+
+
+plot_model(brm_logistic_model, type = "pred", terms = c("ind_cost [all]", "tratamento", "pop_vul")) +
+  theme_bw(base_size = 58) +
+  labs(x = "Cost in dollars", y = "Probability of Cure", title = NULL, colour = "Type")
+ggsave("../results/Fig_6B_Probability_cure_pop_vul.pdf", device = "pdf", width = 35, height = 20)
+
+
+plot_model(brm_logistic_model, type = "pred", terms = c("ind_cost [all]", "tratamento")) +
+  theme_bw(base_size = 58) +
+  labs(x = "Cost in dollars", y = "Probability of Cure", title = NULL, colour = "Type")
+ggsave("../results/Fig_6C_Probability.pdf", device = "pdf", width = 35, height = 20)
+
+
+plot_model(brm_logistic_model, type = "pred", terms = c("ind_cost [all]")) +
+  theme_bw(base_size = 58) +
+  labs(x = "Cost in dollars", y = "Probability of Cure", title = NULL, colour = "Type")
+ggsave("../results/Fig_6D_Probability_geral.pdf", device = "pdf", width = 35, height = 20)
+```
+
+
+
+
+```{r}
+#probability of cure vul vc non vul
+logistic_data <- logistic_data %>% 
+  mutate(pop_vul_dummy = ifelse(pop_vul == "Non vul pop", "Non vul pop", "Vulnerable population"))
+
+
+
+brm_logistic_model_dummy <- brm(
+  data = logistic_data,
+  family = bernoulli(),
+  formula = situa_ence ~ ind_cost + sex + tratamento + pop_vul_dummy + nu_ano,
+  seed = 14,
+  chains = 4, 
+  cores = 4, 
+  backend = "cmdstanr",
+  iter = 2000,
+)
+
+
+summary(brm_logistic_model_dummy)
+
+
+#check chain convergence
+pdf("../results/Chain_convergence_model_B.pdf", width = 30, height = 30)
+mcmc_trace(brm_logistic_model_dummy)
+dev.off()
+
+#plot posteriror predictive check
+pdf("../results/Predictive_posterior_check_model_B.pdf", width = 20, height = 15)
+pp_check(brm_logistic_model_dummy, type = "stat", ndraws = 100)
+dev.off()
+
+plot_model(brm_logistic_model_dummy, type = "pred", 
+           terms = c("ind_cost [all]", "tratamento", "pop_vul_dummy")) +
+  theme_bw(base_size = 58) +
+  labs(x = "Cost in dollars", y = "Probability of Cure", title = NULL, colour = "Type")
+ggsave("../results/Fig_6E_Probability.pdf", device = "pdf", width = 35, height = 20)
+
+
+plot_model(brm_logistic_model_dummy, type = "pred", terms = c("ind_cost [all]",  "pop_vul_dummy")) +
+  theme_bw(base_size = 58) +
+  labs(x = "Cost in dollars", y = "Probability of Cure", title = NULL, colour = "Type")
+ggsave("../results/Fig_6F_Probability.pdf", device = "pdf", width = 35, height = 20)
+```
+
+
+```{r}
+logistic_data <- logistic_data %>% 
+  mutate(outcome = ifelse(situa_ence == 1, "Cure", "LTFU"),
+         exposed = factor(tratsup_at, levels =c("Yes", "No"), labels = c("Yes", "No")))
+
+#compute nnt in re enter
+nnt_re_data <- logistic_data %>% 
+  filter(tratamento == "Re enter")
+
+nnt_new_case <- logistic_data %>% 
+  filter(tratamento != "Re enter")
+
+nnt_hiv <- logistic_data %>% 
+  filter(pop_vul == "HIV")
+
+nnt_hom <- logistic_data %>% 
+  filter(pop_vul == "Homelessness")
+
+nnt_imi <- logistic_data %>% 
+  filter(pop_vul == "Imigrants")
+
+nnt_lid <- logistic_data %>% 
+  filter(pop_vul == "Liberty deprivation")
+
+nnt_pre <- logistic_data %>% 
+  filter(pop_vul == "Pregnant")
+
+nnt_hwp <- logistic_data %>% 
+  filter(pop_vul == "Health Workers")
+
+nnt_dru <- logistic_data %>% 
+  filter(pop_vul == "Drug use")
+
+
+
+
+#Compute nnt in overall population
+nnt(table(logistic_data$exposed, logistic_data$outcome))
+nnt(table(nnt_new_case$exposed,nnt_new_case$outcome))
+nnt(table(nnt_re_data$exposed, nnt_re_data$outcome))
+nnt(table(nnt_hiv$exposed, nnt_hiv$outcome))
+nnt(table(nnt_hom$exposed, nnt_hom$outcome))
+nnt(table(nnt_imi$exposed, nnt_imi$outcome))
+nnt(table(nnt_lid$exposed, nnt_lid$outcome))
+nnt(table(nnt_pre$exposed, nnt_pre$outcome))
+nnt(table(nnt_hwp$exposed, nnt_hwp$outcome))
+nnt(table(nnt_dru$exposed, nnt_dru$outcome))
+```
+
+
+
+```{r}
+cost_df <- data.frame(
+  type = c("Doc",       "ACS",     "Exam",    "Trat",     "Baci"),
+  cost = c(17.043 * 6, 115.77 * 6,   82.64,     5.20 * 180, 5.16 * 6))
+
+cost_df <- cost_df %>% 
+  mutate(prop = cost/sum(cost))
+
+ggplot(cost_df %>% filter(type != "ACS"), aes(x="", y=prop, fill=type)) +
+  geom_bar(stat="identity", width=1) +
+  coord_polar("y", start=0) +
+  theme_void(base_size = 38) +
+  theme(legend.position="bottom")
+ggsave("../results/Fig_7A_Without_dot.pdf", device = "pdf", width = 35, height = 20)
+
+
+ggplot(cost_df %>% filter(type = "ACS"), aes(x="", y=prop, fill=type)) +
+  geom_bar(stat="identity", width=1) +
+  coord_polar("y", start=0) +
+  theme_void(base_size = 38) +
+  theme(legend.position="bottom")
+ggsave("../results/Fig_7B_dot.pdf", device = "pdf", width = 35, height = 20)
+```
+
+
+
+```{r}
+data %>% 
+  group_by(pop_vul) %>% 
+  summarise(n =n())
+
+cost_df <- data.frame(
+  pop = c("Non vul", "Hw", "LD", "Im", "Pregnat", "DU", "Homeless", "HIV"),
+  cost = c(258     , 150 ,  245, 298 , 300      , 389 , 400       , 300 ),
+  cases = c(337713, 4805, 43003, 2081, 1815, 49061, 6539, 19907))
+
+
+
+ggplot(cost_df, aes(x = pop, y = cost * cases)) +
+  geom_bar(stat = "identity") +
+  theme_bw(base_size = 58) +
+  labs(x = NULL,
+       y = "Cost in dollars to achive 90%") +
+  theme(axis.text.x = element_text(angle = 90))
+ggsave("../results/Fig_7_cost_to_90.pdf", device = "pdf", width = 35, height = 20)
+
+
+cost_df <- data.frame(
+  pop = c("New case", "Reenter"),
+  cost = c(255, 355))
+
+
+
+ggplot(cost_df, aes(x = pop, y = cost)) +
+  geom_bar(stat = "identity") +
+  theme_bw(base_size = 58) +
+  labs(x = NULL,
+       y = "Cost in dollars to achive 90%")
+ggsave("../results/Fig_7B_cost_to_90.pdf", device = "pdf", width = 35, height = 20)
+```
