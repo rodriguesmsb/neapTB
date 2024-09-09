@@ -1,5 +1,5 @@
 ---
-title: "Map"
+title: "Main analysis"
 output: html_document
 date: '2022-10-05'
 editor_options: 
@@ -9,7 +9,7 @@ editor_options:
 
 ```{r}
 rm(list=ls())
-source("../../Auxiliary_functions.R")
+source("Auxiliary_functions.R")
 libraries <-  c("tidyverse",  "scales", "survival", "car",
                 "compareGroups", "sjPlot", "easystats", "brms", "cmdstanr",
                 "bayesplot", "parameters","fmsb")
